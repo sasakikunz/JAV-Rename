@@ -128,7 +128,7 @@ class MovieNormalizer:
         return s
 
     def _remove_xyz_domain(self, s):
-        s = re.sub(r'[a-zA-Z0-9.-]+\.(?:com|tv|me|la|xyz|cc|net|org|pro)[@-]?', '', s, flags=re.IGNORECASE)
+        s = re.sub(r'[a-zA-Z0-9-]+\.(?:com|tv|me|la|xyz|cc|net|org|pro)[@-]?', '', s, flags=re.IGNORECASE)
         s = s.replace('@', ' ')
         return s
 
@@ -373,7 +373,7 @@ class MovieNormalizer:
         return s
 
     def _should_skip_normalization(self, name: str) -> bool:
-        skip_keywords = ['G-Area', 'GAREA', 'pgm', 'S-Cute', 'Mywife', 'Maxi-247', 'gachinco', 'pacopacomama', 'OnlyFans']
+        skip_keywords = ['G-Area', 'GAREA', 'pgm', 'S-Cute', 'Mywife', 'Maxi-247', 'gachinco', 'pacopacomama', 'OnlyFans', 'BrazzersExxtra']
         name_upper = name.upper()
         for kw in skip_keywords:
             if kw.upper() in name_upper:
@@ -436,11 +436,11 @@ class MovieNormalizer:
 
                                 working = self._remove_ad_text(working)
 
+                                working = self._remove_resolution_tags(working)
+
                                 working = self._remove_xyz_domain(working)
 
                                 working = self._clean_non_ascii(working)
-
-                                working = self._remove_resolution_tags(working)
 
                                 working = self._remove_date_patterns(working)
 
