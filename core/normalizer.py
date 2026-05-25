@@ -119,12 +119,17 @@ class MovieNormalizer:
         return s
 
     def _remove_resolution_tags(self, s):
+        s = re.sub(r'[-_]?4K60fps', '', s, flags=re.IGNORECASE)
+        s = re.sub(r'[-_]?4K60\b', '', s, flags=re.IGNORECASE)
+        s = re.sub(r'[-_]?60fps\b', '', s, flags=re.IGNORECASE)
+        s = re.sub(r'\b60fps', '', s, flags=re.IGNORECASE)
         s = re.sub(r'[-_]?(FHD|(?<![A-Z])HD\b|1080p|720p|4K|8K|2K|UHD|30p|60p|Leaked)', '', s, flags=re.IGNORECASE)
         s = re.sub(r'[-_](GG5|X1080X|RUNBKK)', '', s, flags=re.IGNORECASE)
         s = re.sub(r'\.(HD|FHD|1080p|720p)\b', '', s, flags=re.IGNORECASE)
         s = re.sub(r'UNCENSORED', '', s, flags=re.IGNORECASE)
         s = re.sub(r'[-_]?UNC\b', '', s, flags=re.IGNORECASE)
         s = re.sub(r'[-_]?(uncensored)\b', '', s, flags=re.IGNORECASE)
+        s = re.sub(r'\.restored\b', '', s, flags=re.IGNORECASE)
         return s
 
     def _remove_xyz_domain(self, s):

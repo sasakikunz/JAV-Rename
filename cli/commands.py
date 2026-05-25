@@ -5,6 +5,7 @@ import argparse
 import os
 import datetime
 import shutil
+import re
 
 from core.normalizer import MovieNormalizer
 from core.matcher import FuzzyMatcher
@@ -43,9 +44,16 @@ def normalize_command(args):
             '路径': item['path']
         })
     
+    timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    
     if not output:
         base = os.path.basename(folder)
-        output = f"{base}_normalized.xlsx"
+        output = f"{base}_normalized_{timestamp}.xlsx"
+    elif os.path.isdir(output):
+        base = os.path.basename(folder.rstrip('/\\'))
+        output = os.path.join(output, f"{base}_normalized_{timestamp}.xlsx")
+    elif not output.lower().endswith(('.xlsx', '.xls')):
+        output += '.xlsx'
     
     write_normalized_results(results, output)
 
@@ -71,9 +79,16 @@ def normalize_excel_command(args):
             normalized = ""
         normalized_names.append(normalized)
     
+    timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    
     if not output:
         base, ext = os.path.splitext(input_file)
-        output = f"{base}_normalized{ext}"
+        output = f"{base}_normalized_{timestamp}{ext}"
+    elif os.path.isdir(output):
+        base, ext = os.path.splitext(os.path.basename(input_file))
+        output = os.path.join(output, f"{base}_normalized_{timestamp}{ext}")
+    elif not output.lower().endswith(('.xlsx', '.xls')):
+        output += '.xlsx'
     
     write_single_column_normalize(input_file, normalized_names, output)
 
@@ -106,9 +121,16 @@ def match_command(args):
             '匹配度': round(score, 4)
         })
     
+    timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    
     if not output:
         base, ext = os.path.splitext(input_file)
-        output = f"{base}_matched{ext}"
+        output = f"{base}_matched_{timestamp}{ext}"
+    elif os.path.isdir(output):
+        base, ext = os.path.splitext(os.path.basename(input_file))
+        output = os.path.join(output, f"{base}_matched_{timestamp}{ext}")
+    elif not output.lower().endswith(('.xlsx', '.xls')):
+        output += '.xlsx'
     
     write_matched_results(results, output)
 
@@ -233,11 +255,139 @@ def rename_enhanced_command(args):
         except (OSError, PermissionError):
             return 0
     
-    def delete_unrenamed(scan_dir, renamed_name):
+    def find_similar_group(file_items):
+        video_exts = {'.mp4', '.avi', '.rmvb', '.wmv', '.mov', '.mkv', '.flv', '.ts', '.webm', '.iso', '.mpg', '.nrg', '.divx'}
+        # 建立 "去掉扩展名的原始文件名 → (原名, 扩展名, 完整路径)" 的索引
+        info_by_name = {}
+        for name, full_path, size in file_items:
+            name_no_ext, ext = os.path.splitext(name)
+            if ext.lower() in video_exts:
+                info_by_name[name_no_ext] = (name, ext, full_path)
+
+        names = list(info_by_name.keys())
+        n = len(names)
+
+        # 并查集：将相似文件合并到同一组
+        parent = list(range(n))
+        def find(x):
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+        def union(x, y):
+            px, py = find(x), find(y)
+            if px != py:
+                parent[px] = py
+
+        def is_similar(a, b):
+            if a == b:
+                return False
+            # 方法1：等长，仅一个字符不同（同为数字或同为字母）
+            if len(a) == len(b):
+                diffs = [(k, a[k], b[k]) for k in range(len(a)) if a[k] != b[k]]
+                if len(diffs) == 1:
+                    _, ca, cb = diffs[0]
+                    return (ca.isdigit() and cb.isdigit()) or (ca.isalpha() and cb.isalpha())
+            # 方法2：一个文件名是另一个的前缀，剩余部分为 [-_ ][数字/字母]
+            if b.startswith(a):
+                return bool(re.match(r'^[-_\s]?[A-Za-z0-9]$', b[len(a):]))
+            if a.startswith(b):
+                return bool(re.match(r'^[-_\s]?[A-Za-z0-9]$', a[len(b):]))
+            return False
+
+        # 两两比对文件名
+        for i in range(n):
+            for j in range(i + 1, n):
+                if is_similar(names[i], names[j]):
+                    union(i, j)
+
+        # 收集分组
+        groups = {}
+        for i in range(n):
+            root = find(i)
+            groups.setdefault(root, []).append(names[i])
+
+        # 处理每组（取第一个 ≥2 的组）
+        for member_names in groups.values():
+            if len(member_names) < 2:
+                continue
+
+            member_names.sort(key=len)
+            base_candidate = member_names[0]
+            seq_map = {base_candidate: 1}
+            ok = True
+
+            for other in member_names[1:]:
+                assigned = False
+                # 方法1：等长仅差一字符
+                if len(base_candidate) == len(other):
+                    diffs = [(k, base_candidate[k], other[k]) for k in range(len(base_candidate)) if base_candidate[k] != other[k]]
+                    if len(diffs) == 1:
+                        _, ca, cb = diffs[0]
+                        if (ca.isdigit() and cb.isdigit()) or (ca.isalpha() and cb.isalpha()):
+                            seq_map[other] = int(cb) if cb.isdigit() else ord(cb.upper()) - ord('A') + 1
+                            assigned = True
+                # 方法2：前缀关系（other 以 base_candidate 开头）
+                if not assigned and other.startswith(base_candidate):
+                    m = re.match(r'^[-_\s]?([A-Za-z0-9])$', other[len(base_candidate):])
+                    if m:
+                        ch = m.group(1)
+                        seq_map[other] = int(ch) if ch.isdigit() else ord(ch.upper()) - ord('A') + 1
+                        assigned = True
+                if not assigned:
+                    ok = False
+                    break
+
+            if not ok or len(seq_map) < 2:
+                continue
+
+            # 补充基础文件：对于等长单字符差异的组，修正序号并查找无序号的基础文件补为CD1
+            all_same_len = len(set(len(n) for n in seq_map.keys())) == 1
+            if all_same_len:
+                keys_list = list(seq_map.keys())
+                ref = keys_list[0]
+                for o in keys_list[1:]:
+                    diffs = [(k, ref[k], o[k]) for k in range(len(ref)) if ref[k] != o[k]]
+                    if len(diffs) == 1:
+                        diff_pos = diffs[0][0]
+                        diff_char = ref[diff_pos]
+                        # 修正 base_candidate 自身的序号（原来硬编码为1）
+                        if diff_char.isdigit():
+                            seq_map[ref] = int(diff_char)
+                        elif diff_char.isalpha():
+                            seq_map[ref] = ord(diff_char.upper()) - ord('A') + 1
+                        # 去掉差异字符及相邻分隔符，重建"纯基础文件名"
+                        reconstructed = ref[:diff_pos].rstrip('-_ ') + ref[diff_pos + 1:].lstrip('-_ ')
+                        if reconstructed in info_by_name:
+                            orig_name, orig_ext, orig_path = info_by_name[reconstructed]
+                            if orig_name not in seq_map:
+                                seq_map[reconstructed] = 1
+                        break
+
+            if len(set(seq_map.values())) != len(seq_map):
+                continue
+
+            # 确定基础名称（去掉尾部特殊字符）
+            base = base_candidate.rstrip('-_ ')
+            if all_same_len and len(seq_map) > len(keys_list):
+                base = reconstructed
+
+            result = []
+            for name_no_ext, seq in sorted(seq_map.items(), key=lambda x: x[1]):
+                name, ext, full_path = info_by_name[name_no_ext]
+                result.append((name, ext, seq, full_path))
+
+            return (base, result)
+
+        return None
+    
+    def delete_unrenamed(scan_dir, renamed_names):
+        if isinstance(renamed_names, str):
+            renamed_names = [renamed_names]
         remaining = []
         try:
             for name in os.listdir(scan_dir):
-                if name == renamed_name:
+                if name in renamed_names:
                     continue
                 remaining.append(name)
         except PermissionError:
@@ -312,6 +462,43 @@ def rename_enhanced_command(args):
             else:
                 print(f"    {idx}.{name}  [文件夹]")
         
+        file_items = [(name, full_path, size) for name, full_path, item_type, size in display_list if item_type == "文件"]
+        similar_group = find_similar_group(file_items)
+        
+        if similar_group:
+            base_name, group_files = similar_group
+            print(f"    {'-'*40}")
+            print(f"  检测到多个文件名类似的文件，是否统一修改名称？")
+            for gf_name, gf_ext, gf_num, gf_path in group_files:
+                new_gf_name = f"{parent_name}-CD{gf_num}{gf_ext}"
+                print(f"    {gf_name} -> {new_gf_name}")
+            while True:
+                confirm = input(f"  (y/n): ").strip().lower()
+                if confirm == 'y':
+                    renamed_names = []
+                    for gf_name, gf_ext, gf_num, gf_path in group_files:
+                        new_gf_name = f"{parent_name}-CD{gf_num}{gf_ext}"
+                        new_gf_path = os.path.join(scan_dir, new_gf_name)
+                        if os.path.exists(new_gf_path):
+                            print(f"    {gf_name} -> {new_gf_name} [跳过（目标已存在）]")
+                            log(gf_name, new_gf_name, "跳过（目标已存在）")
+                        else:
+                            try:
+                                os.rename(gf_path, new_gf_path)
+                                renamed_names.append(new_gf_name)
+                                print(f"    {gf_name} -> {new_gf_name} [成功]")
+                                log(gf_name, new_gf_name, "成功")
+                            except Exception as e:
+                                print(f"    {gf_name} -> {new_gf_name} [失败: {e}]")
+                                log(gf_name, new_gf_name, f"失败: {e}")
+                    if remove_mode:
+                        delete_unrenamed(scan_dir, renamed_names)
+                    return
+                elif confirm == 'n':
+                    break
+                else:
+                    print("  请输入 y 或 n")
+        
         if remove_mode:
             print(f"    {'-'*40}")
             print(f"    0.不修改（将删除所有未重命名的文件）")
@@ -365,6 +552,8 @@ def rename_enhanced_command(args):
             msg = f"跳过（目标已存在）"
             print(f"    {old_name} -> {new_name} [{msg}]")
             log(old_name, new_name, msg)
+            if remove_mode and item_type == "文件":
+                delete_unrenamed(scan_dir, old_name)
             return
         
         try:
